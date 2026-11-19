@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Numbering.Revit'">
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2024</RevitVersion>
+    <BaseIntermediateOutputPath>obj/$(RevitVersion)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/$(RevitVersion)/</BaseOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

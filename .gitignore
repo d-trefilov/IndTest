@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+*.rvt
+*.rfa
+*.log
+*.addin.local

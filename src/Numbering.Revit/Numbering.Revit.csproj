@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' == '2025'">net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <DefineConstants Condition="'$(RevitVersion)' != '2023'">$(DefineConstants);ELEMENT_ID_64_BIT</DefineConstants>
+    <RevitApiVersion Condition="'$(RevitVersion)' == '2023'">2023.1.90</RevitApiVersion>
+    <RevitApiVersion Condition="'$(RevitVersion)' == '2024'">2024.3.60</RevitApiVersion>
+    <RevitApiVersion Condition="'$(RevitVersion)' == '2025'">2025.4.60</RevitApiVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Numbering.Core/Numbering.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(RevitApiDir)' == '' And '$(RevitApiVersion)' != ''">
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitApiVersion)" ExcludeAssets="runtime" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitApiVersion)" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(RevitApiDir)' != ''">
+    <Reference Include="RevitAPI" HintPath="$(RevitApiDir)/RevitAPI.dll" Private="false" />
+    <Reference Include="RevitAPIUI" HintPath="$(RevitApiDir)/RevitAPIUI.dll" Private="false" />
+  </ItemGroup>
+  <Target Name="ValidateRevitVersion" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(RevitApiVersion)' == ''" Text="Set RevitVersion to 2023, 2024, or 2025." />
+  </Target>
+</Project>
