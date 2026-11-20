@@ -3,6 +3,11 @@ namespace Numbering.Core;
 public static class SpatialOrder
 {
     public const double RowTolerance = 300;
+    private static readonly IComparer<ElementData> ByXThenId = Comparer<ElementData>.Create((left, right) =>
+    {
+        int byX = Nullable.Compare(left.X, right.X);
+        return byX != 0 ? byX : left.Id.CompareTo(right.Id);
+    });
 
     public static IReadOnlyList<ElementData> Sort(IEnumerable<ElementData> elements)
     {
@@ -23,9 +28,9 @@ public static class SpatialOrder
                 while (end < byY.Length && anchor - byY[end].Y!.Value <= RowTolerance)
                     end++;
 
-                ordered.AddRange(byY.Skip(start).Take(end - start)
-                    .OrderBy(element => element.X)
-                    .ThenBy(element => element.Id));
+                Array.Sort(byY, start, end - start, ByXThenId);
+                for (int i = start; i < end; i++)
+                    ordered.Add(byY[i]);
                 start = end;
             }
         }
