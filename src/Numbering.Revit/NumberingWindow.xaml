@@ -8,6 +8,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -74,7 +75,29 @@
                 </Style>
             </TextBlock.Style>
         </TextBlock>
-        <DataGrid Grid.Row="3" ItemsSource="{Binding VisibleRows}" AutoGenerateColumns="False"
+        <Expander x:Name="PreviewConflictsPanel" Grid.Row="3" Margin="0,0,0,8">
+            <Expander.Header>
+                <TextBlock Text="{Binding PreviewConflicts.Count, StringFormat='Конфликты предпросмотра ({0})'}"/>
+            </Expander.Header>
+            <Expander.Style>
+                <Style TargetType="Expander">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding PreviewConflicts.Count}" Value="0">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Expander.Style>
+            <ListBox x:Name="PreviewConflictsList" ItemsSource="{Binding PreviewConflicts}" MaxHeight="118"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.VirtualizationMode="Recycling">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Expander>
+        <DataGrid Grid.Row="4" ItemsSource="{Binding VisibleRows}" AutoGenerateColumns="False"
                   IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" HeadersVisibility="Column"
                   EnableRowVirtualization="True" EnableColumnVirtualization="True"
                   VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True"
@@ -99,16 +122,34 @@
                 <DataGridTextColumn Header="Статус" Binding="{Binding Status}" Width="1.6*"/>
             </DataGrid.Columns>
         </DataGrid>
-        <Grid Grid.Row="4" Margin="0,12,0,0">
+        <Grid Grid.Row="5" Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                <TextBlock Text="{Binding Status}" TextWrapping="Wrap"/>
+                <ProgressBar Value="{Binding ApplyProgress, Mode=OneWay}" Height="6" Margin="0,5,0,0"
+                             AutomationProperties.Name="Прогресс записи номеров">
+                    <ProgressBar.Style>
+                        <Style TargetType="ProgressBar">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsApplying}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ApplyProgress}" Value="-1">
+                                    <Setter Property="IsIndeterminate" Value="True"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ProgressBar.Style>
+                </ProgressBar>
+            </StackPanel>
             <Button Grid.Column="1" Content="_Применить" Command="{Binding ApplyCommand}"
                     Padding="16,4" MinWidth="120" MinHeight="30"/>
         </Grid>
-        <Expander Grid.Row="5" Header="{Binding ReportTitle}" Margin="0,10,0,0">
+        <Expander Grid.Row="6" Header="{Binding ReportTitle}" Margin="0,10,0,0">
             <Expander.Style>
                 <Style TargetType="Expander">
                     <Style.Triggers>

@@ -8,9 +8,7 @@ internal sealed class NumberingWriter
 {
     private static readonly TimeSpan SliceTime = TimeSpan.FromMilliseconds(12);
     private readonly Document _document;
-    private readonly Preview _preview;
     private readonly CategoryDefinition _category;
-    private readonly bool _workshared;
     private readonly ElementData[] _targets;
     private readonly Dictionary<long, Parameter> _parameters = new();
     private readonly Dictionary<long, string> _rejected = new();
@@ -21,12 +19,15 @@ internal sealed class NumberingWriter
     public NumberingWriter(Document document, CategoryDefinition category, Preview preview)
     {
         _document = document;
-        _preview = preview;
+        Preview = preview;
         _category = category;
-        _workshared = document.IsWorkshared;
         _targets = preview.Elements.Where(element =>
             preview.Proposals.TryGetValue(element.Id, out var proposal) && proposal.Status == ProposalStatus.Ready).ToArray();
     }
+
+    public Preview Preview { get; }
+    public int PreparedCount => _next;
+    public int TargetCount => _targets.Length;
 
     public bool PrepareNextSlice()
     {
@@ -56,10 +57,6 @@ internal sealed class NumberingWriter
             throw new StalePreviewException();
 
         string? issue = ModelReader.ParameterIssue(parameter);
-        if (issue == null && _workshared
-            && WorksharingUtils.GetCheckoutStatus(_document, id) == CheckoutStatus.OwnedByOtherUser)
-            issue = "Элемент занят другим пользователем.";
-
         if (issue != null)
             _rejected.Add(snapshot.Id, issue);
         else
@@ -74,11 +71,11 @@ internal sealed class NumberingWriter
 
     // A failed attempt is rolled back before the next Idling callback. Only a successful
     // commit contributes to Undo, even when recoverable failures require another attempt.
-    public ApplyReport? TryWrite()
+    public ApplyReport? TryWrite(Action<int, int> onWriteProgress, Action onFinalizing)
     {
         var proposals = _rejected.Count == 0
-            ? _preview.Proposals
-            : ConflictChecker.Check(_preview.Elements, _preview.Proposals, _rejected);
+            ? Preview.Proposals
+            : ConflictChecker.Check(Preview.Elements, Preview.Proposals, _rejected);
         var writes = proposals.Where(pair => pair.Value.Status == ProposalStatus.Ready).ToArray();
         if (writes.Length == 0)
             return CreateReport(proposals, 0);
@@ -96,6 +93,9 @@ internal sealed class NumberingWriter
 
         var clock = Stopwatch.StartNew();
         int rejectedBefore = _rejected.Count;
+        int attempted = 0;
+        long nextUpdate = 0;
+        onWriteProgress(0, writes.Length);
         foreach (var pair in writes)
         {
             try
@@ -105,12 +105,21 @@ internal sealed class NumberingWriter
             }
             catch (Exception error) when (IsElementWriteError(error))
             {
-                _rejected.Add(pair.Key, "Revit отклонил запись параметра.");
+                _rejected.Add(pair.Key, "Revit отклонил запись параметра. " + error.Message);
                 AddinLog.Write($"Запись ID {pair.Key}", error);
+            }
+
+            attempted++;
+            long elapsed = clock.ElapsedMilliseconds;
+            if (elapsed >= nextUpdate || attempted == writes.Length)
+            {
+                onWriteProgress(attempted, writes.Length);
+                nextUpdate = elapsed + 60;
             }
         }
 
         double setMs = clock.Elapsed.TotalMilliseconds;
+        onFinalizing();
         if (_rejected.Count != rejectedBefore)
         {
             if (transaction.RollBack() != TransactionStatus.RolledBack)
@@ -135,7 +144,7 @@ internal sealed class NumberingWriter
         }
 
         return CreateReport(proposals, 0,
-            "Revit отклонил транзакцию целиком. Подробности в журнале.");
+            "Revit отклонил транзакцию целиком. Подробности в журнале.", preprocessor.ErrorDetails);
     }
 
     private static bool IsElementWriteError(Exception error) =>
@@ -146,7 +155,8 @@ internal sealed class NumberingWriter
         && error is not Autodesk.Revit.Exceptions.RegenerationFailedException;
 
     private ApplyReport CreateReport(
-        IReadOnlyDictionary<long, NumberProposal> proposals, int written, string? error = null)
+        IReadOnlyDictionary<long, NumberProposal> proposals, int written,
+        string? error = null, IReadOnlyList<string>? transactionErrors = null)
     {
         int unchanged = proposals.Values.Count(item => item.Status == ProposalStatus.Unchanged);
         var skips = proposals.Where(pair => pair.Value.Status is ProposalStatus.Skipped or ProposalStatus.Conflict)
@@ -156,6 +166,8 @@ internal sealed class NumberingWriter
         var details = new List<string>();
         if (error != null)
             details.Add(error);
+        if (transactionErrors != null)
+            details.AddRange(transactionErrors);
         details.AddRange(skips);
         details.AddRange(_warnings.Select(warning => "Предупреждение: " + warning));
         details.Add("Журнал: " + AddinLog.Path);
@@ -176,6 +188,7 @@ internal sealed class NumberingFailures : IFailuresPreprocessor
     private readonly HashSet<long> _writeIds;
     private readonly HashSet<string> _warnings;
     private readonly Dictionary<long, string> _errors = new();
+    private readonly List<string> _errorDetails = new();
 
     public NumberingFailures(IEnumerable<long> writeIds, HashSet<string> warnings)
     {
@@ -184,6 +197,7 @@ internal sealed class NumberingFailures : IFailuresPreprocessor
     }
 
     public IReadOnlyDictionary<long, string> Errors => _errors;
+    public IReadOnlyList<string> ErrorDetails => _errorDetails;
     public bool HasUnmappedError { get; private set; }
 
     public FailureProcessingResult PreprocessFailures(FailuresAccessor accessor)
@@ -203,6 +217,7 @@ internal sealed class NumberingFailures : IFailuresPreprocessor
             }
 
             rollback = true;
+            _errorDetails.Add(detail);
             AddinLog.Write("Ошибка транзакции Revit: " + detail);
 
             var affected = ids.Where(_writeIds.Contains).ToArray();

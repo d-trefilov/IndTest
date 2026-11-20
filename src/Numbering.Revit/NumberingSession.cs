@@ -12,7 +12,7 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
     private readonly UIApplication _app;
     private readonly NumberingWindowHost _window;
     private readonly ExternalEvent _externalEvent;
-    private readonly ConcurrentQueue<Action<UIApplication>> _requests = new();
+    private readonly ConcurrentQueue<Action> _requests = new();
     private readonly Action _onClosed;
 
     private Document? _document;
@@ -26,9 +26,7 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
     private bool _writing;
     private volatile bool _disposed;
 
-    private Preview? _pending;
     private NumberingWriter? _writer;
-    private bool _prepared;
 
     public NumberingSession(UIApplication app, Action onClosed)
     {
@@ -42,8 +40,8 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         try
         {
             _window = new NumberingWindowHost(settings, settingsError,
-                category => Queue(_ => ChangeCategory(category)),
-                preview => Queue(revit => BeginWrite(revit, preview)));
+                category => Queue(() => ChangeCategory(category)),
+                preview => Queue(() => BeginWrite(preview)));
         }
         catch
         {
@@ -63,43 +61,60 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
 
     public string GetName() => "Применение нумерации элементов";
 
-    public void Execute(UIApplication app) => ProcessRequests(app);
+    public void Execute(UIApplication app)
+    {
+        if (_disposed || _window.IsClosed)
+            return;
 
-    private void Queue(Action<UIApplication> request)
+        try
+        {
+            ObserveDocument();
+            while (!_disposed && !_window.IsClosed && _requests.TryDequeue(out var request))
+                request();
+        }
+        catch (Exception error)
+        {
+            FailWrite(error);
+        }
+    }
+
+    private void Queue(Action request)
     {
         if (_disposed)
             return;
 
         _requests.Enqueue(request);
+        TrySignalRequests();
+    }
+
+    private bool TrySignalRequests()
+    {
         try
         {
-            // Idling also drains the queue if Revit cannot accept a new event right now.
-            _externalEvent.Raise();
+            var result = _externalEvent.Raise();
+            if (result is ExternalEventRequest.Accepted or ExternalEventRequest.Pending)
+                return true;
+
+            AddinLog.Write($"Revit не принял запрос нумерации: {result}.");
         }
         catch (Exception error)
         {
             if (!_disposed)
                 AddinLog.Write("Сигнал Revit", error);
         }
+
+        return false;
     }
 
-    private void ProcessRequests(UIApplication app)
+    private void BeginWrite(Preview preview)
     {
-        while (!_disposed && !_window.IsClosed && _requests.TryDequeue(out var request))
-            request(app);
-    }
-
-    private void BeginWrite(UIApplication app, Preview preview)
-    {
-        if (_pending != null)
+        if (_writer != null)
             return;
 
-        _pending = preview;
         try
         {
-            var document = ValidateWrite(app, checkSelection: true);
+            var document = ValidateWrite(preview, checkSelection: true);
             _writer = new NumberingWriter(document, _category, preview);
-            _prepared = false;
         }
         catch (StalePreviewException)
         {
@@ -111,18 +126,18 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         }
     }
 
-    private Document ValidateWrite(UIApplication app, bool checkSelection)
+    private Document ValidateWrite(Preview preview, bool checkSelection)
     {
         if (_document == null || !_document.IsValidObject || _reload || _reader != null
-            || !ReferenceEquals(_pending?.Elements, _loadedRows)
-            || !Equals(_document, app.ActiveUIDocument?.Document))
+            || !ReferenceEquals(preview.Elements, _loadedRows)
+            || !Equals(_document, _app.ActiveUIDocument?.Document))
             throw new StalePreviewException();
 
         if (_document.IsReadOnly)
             throw new ReadOnlyModelException();
 
-        if (checkSelection && _pending?.Selection is long[] expected
-            && !new HashSet<long>(expected).SetEquals(GetSelection(app)))
+        if (checkSelection && preview.Selection is long[] expected
+            && !new HashSet<long>(expected).SetEquals(GetSelection(_app)))
             throw new StalePreviewException();
 
         return _document;
@@ -141,10 +156,17 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         try
         {
             ObserveDocument();
-            ProcessRequests(_app);
+            // Retry the signal if Revit could not accept it from the window thread.
+            if (!_requests.IsEmpty && !_externalEvent.IsPending && !TrySignalRequests())
+            {
+                Close();
+                TaskDialog.Show("Нумерация элементов",
+                    "Revit не принял запрос. Откройте окно нумерации снова. Журнал: " + AddinLog.Path);
+                return;
+            }
             if (_writer != null)
             {
-                ProcessWrite();
+                ProcessWrite(_writer);
                 if (_writer != null || _reload)
                     args.SetRaiseWithoutDelay();
                 return;
@@ -173,7 +195,12 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
                 var rows = _reader.Rows;
                 long[] selection = GetSelection(_app);
                 _loadedRows = rows;
-                _window.Post(vm => vm.SetElements(rows, selection));
+                var category = _category;
+                _window.Post(vm =>
+                {
+                    if (vm.Category == category)
+                        vm.SetElements(rows, selection);
+                });
                 AddinLog.Write($"Revit {_app.Application.VersionNumber}. Чтение {_category.Key}: "
                     + $"{rows.Count} элементов, всего {_loadTime!.Elapsed.TotalMilliseconds:F1} мс, "
                     + $"макс. порция {_reader.MaxSliceMs:F1} мс.");
@@ -202,24 +229,41 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         }
     }
 
-    private void ProcessWrite()
+    private void ProcessWrite(NumberingWriter writer)
     {
         try
         {
-            ValidateWrite(_app, checkSelection: _prepared);
-            if (!_prepared)
+            ValidateWrite(writer.Preview, checkSelection: false);
+            bool prepared = writer.PrepareNextSlice();
+            if (!prepared)
             {
-                _prepared = _writer!.PrepareNextSlice();
-                if (_prepared)
-                    _window.Post(vm => vm.Status = "Запись номеров в Revit…");
+                int count = writer.PreparedCount;
+                int total = writer.TargetCount;
+                _window.Post(vm =>
+                {
+                    vm.ApplyProgress = (int)(100L * count / total);
+                    vm.Status = $"Подготовка к записи: {count} из {total}.";
+                });
                 return;
             }
 
+            ValidateWrite(writer.Preview, checkSelection: true);
             _writing = true;
             ApplyReport? report;
             try
             {
-                report = _writer!.TryWrite();
+                report = writer.TryWrite(
+                    (count, total) => _window.Post(vm =>
+                    {
+                        int percent = (int)(100L * count / total);
+                        vm.ApplyProgress = percent;
+                        vm.Status = $"Запись номеров: {percent}% ({count} из {total}).";
+                    }),
+                    () => _window.Post(vm =>
+                    {
+                        vm.ApplyProgress = -1;
+                        vm.Status = "Завершение попытки записи в Revit…";
+                    }));
             }
             finally
             {
@@ -230,8 +274,12 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
                 FinishWrite(report.Title, report.Details);
             else
             {
-                _writer!.PrepareRetry();
-                _prepared = false;
+                writer.PrepareRetry();
+                _window.Post(vm =>
+                {
+                    vm.ApplyProgress = 0;
+                    vm.Status = "Подготовка к повторной записи…";
+                });
             }
         }
         catch (StalePreviewException)
@@ -256,7 +304,7 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         if (Equals(current, _document))
             return;
 
-        bool interrupted = _pending != null;
+        bool interrupted = _writer != null;
         bool replacingDocument = _document != null;
         CancelWrite();
         _document = current;
@@ -297,7 +345,7 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         if (_writing || !Equals(_document, document))
             return;
 
-        if (_pending != null)
+        if (_writer != null)
             FinishWrite("Модель изменилась. Проверьте обновлённый предпросмотр.");
         else
             Reload();
@@ -332,7 +380,6 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
     private void CancelWrite()
     {
         _writer = null;
-        _pending = null;
         _window.Post(vm => vm.IsApplying = false);
     }
 

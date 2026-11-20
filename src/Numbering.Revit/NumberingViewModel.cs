@@ -18,12 +18,14 @@ internal sealed class NumberingViewModel : INotifyPropertyChanged
     private string _search = "";
     private int _scopeIndex;
     private bool _applying;
+    private int _applyProgress = -1;
     private string _documentTitle = "Нет активного проекта";
     private string _status = "Откройте проект Revit.";
     private string _templateError = "";
     private string _reportTitle = "";
     private string _reportDetails = "";
     private IReadOnlyList<TableRow> _visibleRows = Array.Empty<TableRow>();
+    private IReadOnlyList<string> _previewConflicts = Array.Empty<string>();
     private IReadOnlyList<ElementData>? _elements;
     private Task<IReadOnlyList<ElementData>>? _spatialOrder;
     private long[] _selection = Array.Empty<long>();
@@ -130,6 +132,12 @@ internal sealed class NumberingViewModel : INotifyPropertyChanged
         }
     }
 
+    public int ApplyProgress
+    {
+        get => _applyProgress;
+        set => Set(ref _applyProgress, value);
+    }
+
     public string DocumentTitle
     {
         get => _documentTitle;
@@ -164,6 +172,12 @@ internal sealed class NumberingViewModel : INotifyPropertyChanged
     {
         get => _visibleRows;
         private set => Set(ref _visibleRows, value);
+    }
+
+    public IReadOnlyList<string> PreviewConflicts
+    {
+        get => _previewConflicts;
+        private set => Set(ref _previewConflicts, value);
     }
 
     public ICommand ApplyCommand => _apply;
@@ -205,6 +219,7 @@ internal sealed class NumberingViewModel : INotifyPropertyChanged
         _calculation?.Dispose();
         _calculation = null;
         _preview = null;
+        PreviewConflicts = Array.Empty<string>();
         _apply.Refresh();
     }
 
@@ -292,9 +307,10 @@ internal sealed class NumberingViewModel : INotifyPropertyChanged
     {
         _preview = preview;
         VisibleRows = preview.Table;
+        PreviewConflicts = preview.Conflicts;
         Status = $"В таблице {preview.Table.Count} из {preview.Elements.Count}. В охвате: {preview.ScopeCount}."
             + (preview.Hidden > 0 ? $" Скрыто поиском: {preview.Hidden}." : "")
-            + (templateValid ? $" К записи: {preview.ReadyCount}. Конфликты: {preview.ConflictCount}. "
+            + (templateValid ? $" К записи: {preview.ReadyCount}. Конфликты: {preview.Conflicts.Count}. "
                 + $"Пропуски: {preview.SkippedCount}." : "");
         _apply.Refresh();
     }
@@ -324,6 +340,7 @@ internal sealed class NumberingViewModel : INotifyPropertyChanged
         {
             if (CanExecute(parameter))
             {
+                _owner.ApplyProgress = 0;
                 _owner.IsApplying = true;
                 _owner.Status = "Подготовка к записи…";
                 _owner.SetReport("", "");
@@ -367,7 +384,10 @@ internal sealed class Preview
         ScopeCount = scopeCount;
         Hidden = hidden;
         ReadyCount = proposals.Values.Count(item => item.Status == ProposalStatus.Ready);
-        ConflictCount = proposals.Values.Count(item => item.Status == ProposalStatus.Conflict);
+        Conflicts = proposals.Where(pair => pair.Value.Status == ProposalStatus.Conflict)
+            .OrderBy(pair => pair.Key)
+            .Select(pair => $"ID {pair.Key} · {pair.Value.Value}. {pair.Value.Reason}")
+            .ToArray();
         SkippedCount = proposals.Values.Count(item => item.Status == ProposalStatus.Skipped);
     }
 
@@ -378,6 +398,6 @@ internal sealed class Preview
     public int ScopeCount { get; }
     public int Hidden { get; }
     public int ReadyCount { get; }
-    public int ConflictCount { get; }
+    public IReadOnlyList<string> Conflicts { get; }
     public int SkippedCount { get; }
 }
