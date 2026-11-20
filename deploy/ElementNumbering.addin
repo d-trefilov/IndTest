@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Element Numbering</Name>
+    <Assembly>ElementNumbering/Numbering.Revit.dll</Assembly>
+    <AddInId>f8af329c-8e7f-4e39-9d42-875fb69ec6aa</AddInId>
+    <FullClassName>Numbering.Revit.App</FullClassName>
+    <VendorId>ELNB</VendorId>
+    <VendorDescription>Element Numbering</VendorDescription>
+  </AddIn>
+</RevitAddIns>
