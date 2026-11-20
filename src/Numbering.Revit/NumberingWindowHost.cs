@@ -1,12 +1,11 @@
 using System.Collections.Concurrent;
 using System.Windows;
-using System.Windows.Interop;
 using System.Windows.Threading;
 
 namespace Numbering.Revit;
 
-// Revit's final transaction runs on its main thread. The window has its own
-// dispatcher so the user can still move, resize and scroll it during that time.
+// The independent dispatcher keeps the window usable during a Revit commit.
+// A Win32 owner on the Revit thread would join the two threads' input queues.
 internal sealed class NumberingWindowHost
 {
     private readonly ConcurrentQueue<Action<NumberingViewModel>> _updates = new();
@@ -15,10 +14,10 @@ internal sealed class NumberingWindowHost
     private int _closed;
     private int _startupFailed;
 
-    public NumberingWindowHost(IntPtr owner, NumberingSettings settings, string? settingsError,
+    public NumberingWindowHost(NumberingSettings settings, string? settingsError,
         Action<CategoryDefinition> categoryChanged, Action<Preview> applyRequested)
     {
-        var thread = new Thread(() => Run(owner, settings, settingsError, categoryChanged, applyRequested))
+        var thread = new Thread(() => Run(settings, settingsError, categoryChanged, applyRequested))
         {
             IsBackground = true,
             Name = "Element Numbering WPF"
@@ -49,7 +48,7 @@ internal sealed class NumberingWindowHost
         dispatcher?.BeginInvoke(DispatcherPriority.Normal, new Action(Drain));
     }
 
-    private void Run(IntPtr owner, NumberingSettings settings, string? settingsError,
+    private void Run(NumberingSettings settings, string? settingsError,
         Action<CategoryDefinition> categoryChanged, Action<Preview> applyRequested)
     {
         var dispatcher = Dispatcher.CurrentDispatcher;
@@ -57,7 +56,6 @@ internal sealed class NumberingWindowHost
         {
             var viewModel = new NumberingViewModel(settings);
             _window = new NumberingWindow(viewModel);
-            new WindowInteropHelper(_window).Owner = owner;
             if (settingsError != null)
                 viewModel.SetReport(settingsError, "Журнал: " + AddinLog.Path);
 

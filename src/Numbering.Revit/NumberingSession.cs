@@ -41,7 +41,7 @@ internal sealed class NumberingSession : IExternalEventHandler, IDisposable
         _externalEvent = ExternalEvent.Create(this);
         try
         {
-            _window = new NumberingWindowHost(app.MainWindowHandle, settings, settingsError,
+            _window = new NumberingWindowHost(settings, settingsError,
                 category => Queue(_ => ChangeCategory(category)),
                 preview => Queue(revit => BeginWrite(revit, preview)));
         }
